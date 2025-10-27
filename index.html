@@ -1,1 +1,342 @@
 
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>block blast — html game</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#ffd166;--brick1:#ef476f;--brick2:#06d6a0;--brick3:#118ab2}
+    *{box-sizing:border-box;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#071021);color:#eef}
+    .wrapper{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{width:920px;max-width:96vw;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;padding:16px;box-shadow:0 8px 30px rgba(2,6,23,0.6);display:grid;grid-template-columns:1fr 300px;gap:16px}
+    canvas{background:linear-gradient(180deg,#071428,#0b1a2b);border-radius:8px;display:block;width:100%;height:600px}
+    .sidebar{padding:12px;background:rgba(255,255,255,0.02);border-radius:8px;display:flex;flex-direction:column;gap:12px}
+    h1{font-size:20px;margin:0 0 6px 0;color:var(--accent)}
+    .info{font-size:14px;line-height:1.4;color:#cfe8ff}
+    .hud{display:flex;flex-direction:column;gap:6px}
+    .row{display:flex;justify-content:space-between;align-items:center}
+    button{background:var(--accent);border:none;padding:8px 10px;border-radius:8px;font-weight:600;cursor:pointer}
+    button.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit}
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    .small{font-size:13px;color:#bcd}
+    footer{font-size:12px;color:#9fb}
+    @media(max-width:800px){.card{grid-template-columns:1fr;}
+      canvas{height:420px}}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="card">
+      <div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+      </div>
+      <aside class="sidebar">
+        <div>
+          <h1>block blast</h1>
+          <p class="info">pecahkan semua blok! gunakan panah kiri/kanan atau sentuh layar untuk menggerakkan paddle. tekan spasi untuk pause / mulai.</p>
+        </div>
+        <div class="hud">
+          <div class="row"><div class="small">skor</div><div id="score">0</div></div>
+          <div class="row"><div class="small">nyawa</div><div id="lives">3</div></div>
+          <div class="row"><div class="small">level</div><div id="level">1</div></div>
+        </div>
+        <div class="controls">
+          <button id="btnRestart">restart</button>
+          <button class="secondary" id="btnMute">mute</button>
+          <button class="secondary" id="btnHelp">cara main</button>
+        </div>
+        <div>
+          <p class="small">fitur: multiple level, blocks warna-warni, collision yang halus, responsive (desktop & mobile)</p>
+        </div>
+        <footer>dibuat oleh chatgpt — coba minta fitur tambahan!</footer>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+  // block blast — simple brick-breaker
+  // constants & canvas setup
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  let W = canvas.width; let H = canvas.height;
+  function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    // keep internal resolution stable but allow css scaling
+    // no change to W & H to keep game physics consistent
+  }
+  window.addEventListener('resize', resizeCanvas);
+
+  // game state
+  const state = {
+    running: false,
+    score: 0,
+    lives: 3,
+    level: 1,
+    rows: 4,
+    cols: 8,
+    bricks: [],
+    paddle: null,
+    ball: null,
+    keys: {left:false,right:false},
+    mute: false
+  };
+
+  // paddle
+  function createPaddle(){
+    return {
+      w: 120,
+      h: 14,
+      x: (W-120)/2,
+      y: H-40,
+      speed: 8
+    }
+  }
+
+  // ball
+  function createBall(){
+    return {
+      r: 9,
+      x: W/2,
+      y: H-80,
+      vx: 4*(Math.random() > 0.5 ? 1 : -1),
+      vy: -5
+    }
+  }
+
+  // bricks
+  function buildBricks(rows,cols){
+    const bricks = [];
+    const padding = 10;
+    const offsetTop = 60;
+    const offsetLeft = 40;
+    const totalW = W - offsetLeft*2;
+    const brickW = Math.floor((totalW - (cols-1)*padding) / cols);
+    const brickH = 22;
+
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        bricks.push({
+          x: offsetLeft + c*(brickW+padding),
+          y: offsetTop + r*(brickH+padding),
+          w: brickW,
+          h: brickH,
+          hit: false,
+          hp: r%3 === 0 ? 1 : (r%3===1?2:3) // different strength
+        })
+      }
+    }
+    return bricks;
+  }
+
+  // init
+  function init(level=1){
+    state.level = level;
+    state.rows = Math.min(6, 3 + Math.floor((level-1)/1));
+    state.cols = Math.min(10, 6 + Math.floor((level-1)/2));
+    state.bricks = buildBricks(state.rows,state.cols);
+    state.paddle = createPaddle();
+    state.ball = createBall();
+    state.running = false;
+    document.getElementById('score').textContent = state.score;
+    document.getElementById('lives').textContent = state.lives;
+    document.getElementById('level').textContent = state.level;
+  }
+
+  // draw helpers
+  function drawRoundedRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function draw(){
+    // background
+    ctx.clearRect(0,0,W,H);
+
+    // bricks
+    for(const b of state.bricks){
+      if(b.hp<=0) continue;
+      if(b.hp===1) ctx.fillStyle = '#ef476f';
+      else if(b.hp===2) ctx.fillStyle = '#06d6a0';
+      else ctx.fillStyle = '#118ab2';
+      drawRoundedRect(b.x,b.y,b.w,b.h,6);
+      // subtle border
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.strokeRect(b.x,b.y,b.w,b.h);
+    }
+
+    // paddle
+    ctx.fillStyle = '#ffd166';
+    drawRoundedRect(state.paddle.x,state.paddle.y,state.paddle.w,state.paddle.h,8);
+
+    // ball
+    const ball = state.ball;
+    ctx.beginPath();
+    ctx.fillStyle = '#ffffff';
+    ctx.arc(ball.x,ball.y,ball.r,0,Math.PI*2);
+    ctx.fill();
+
+    // hud overlay
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(0,0,W,36);
+
+    ctx.fillStyle = '#cfe8ff';
+    ctx.font = '14px system-ui,Segoe UI,Roboto';
+    ctx.fillText('score: '+state.score,12,22);
+    ctx.fillText('lives: '+state.lives,120,22);
+    ctx.fillText('level: '+state.level,220,22);
+
+    if(!state.running){
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(W/2-150,H/2-60,300,120);
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px system-ui';
+      ctx.textAlign = 'center';
+      ctx.fillText('tekan spasi untuk mulai',W/2,H/2-12);
+      ctx.fillText('gunakan ← → atau sentuh untuk menggerakkan',W/2,H/2+18);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  // physics & update
+  function update(){
+    if(!state.running) return;
+    const p = state.paddle;
+    if(state.keys.left) p.x -= p.speed;
+    if(state.keys.right) p.x += p.speed;
+    // clamp
+    p.x = Math.max(8, Math.min(W - p.w - 8, p.x));
+
+    const ball = state.ball;
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    // wall collisions
+    if(ball.x - ball.r < 0){ ball.x = ball.r; ball.vx *= -1; }
+    if(ball.x + ball.r > W){ ball.x = W - ball.r; ball.vx *= -1; }
+    if(ball.y - ball.r < 40){ ball.y = 40 + ball.r; ball.vy *= -1; }
+
+    // paddle collision
+    if(ball.y + ball.r >= p.y && ball.y + ball.r <= p.y + p.h && ball.x >= p.x && ball.x <= p.x + p.w){
+      // reflect depending on hit position
+      const rel = (ball.x - (p.x + p.w/2)) / (p.w/2); // -1 .. 1
+      const speed = Math.sqrt(ball.vx*ball.vx + ball.vy*ball.vy);
+      const angle = rel * (Math.PI/3); // max 60deg
+      ball.vx = speed * Math.sin(angle);
+      ball.vy = -Math.abs(speed * Math.cos(angle));
+      ball.y = p.y - ball.r - 1;
+      playSound('hit');
+    }
+
+    // bottom - lose life
+    if(ball.y - ball.r > H){
+      state.lives -= 1;
+      document.getElementById('lives').textContent = state.lives;
+      playSound('lose');
+      if(state.lives <= 0){
+        // game over
+        state.running = false;
+        showMessage('game over — tekan restart');
+      } else {
+        // reset ball & pause
+        state.ball = createBall();
+        state.running = false;
+      }
+    }
+
+    // brick collisions (AABB)
+    for(const b of state.bricks){
+      if(b.hp<=0) continue;
+      if(ball.x + ball.r > b.x && ball.x - ball.r < b.x + b.w && ball.y + ball.r > b.y && ball.y - ball.r < b.y + b.h){
+        // simple collision: decide whether to invert vx or vy by overlap
+        const overlapX = Math.min(ball.x + ball.r - b.x, b.x + b.w - (ball.x - ball.r));
+        const overlapY = Math.min(ball.y + ball.r - b.y, b.y + b.h - (ball.y - ball.r));
+        if(overlapX < overlapY){ ball.vx *= -1; }
+        else { ball.vy *= -1; }
+        b.hp -= 1;
+        state.score += 10;
+        document.getElementById('score').textContent = state.score;
+        playSound('break');
+        break; // avoid multiple collisions this frame
+      }
+    }
+
+    // check level cleared
+    const remaining = state.bricks.filter(b => b.hp>0).length;
+    if(remaining === 0){
+      // next level
+      state.level += 1;
+      document.getElementById('level').textContent = state.level;
+      state.bricks = buildBricks(Math.min(6,state.rows+1), Math.min(10,state.cols+1));
+      state.ball = createBall();
+      state.running = false;
+      showMessage('level cleared! tekan spasi untuk lanjut');
+    }
+  }
+
+  // message overlay
+  function showMessage(text){
+    // small temporary overlay handled in draw() while paused
+    // we'll also flash console (simple)
+    console.log(text);
+  }
+
+  // input
+  window.addEventListener('keydown', e=>{
+    if(e.code === 'ArrowLeft'){ state.keys.left = true; }
+    if(e.code === 'ArrowRight'){ state.keys.right = true; }
+    if(e.code === 'Space'){ state.running = !state.running; }
+  });
+  window.addEventListener('keyup', e=>{
+    if(e.code === 'ArrowLeft'){ state.keys.left = false; }
+    if(e.code === 'ArrowRight'){ state.keys.right = false; }
+  });
+
+  // mouse move / touch controls for paddle
+  let touching = false;
+  canvas.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width/rect.width);
+    state.paddle.x = x - state.paddle.w/2;
+  });
+  canvas.addEventListener('touchstart', e=>{ touching = true; const t=e.touches[0]; handleTouch(t); state.running = true; });
+  canvas.addEventListener('touchmove', e=>{ const t=e.touches[0]; handleTouch(t); e.preventDefault(); });
+  canvas.addEventListener('touchend', e=>{ touching = false; });
+  function handleTouch(t){ const rect = canvas.getBoundingClientRect(); const x = (t.clientX-rect.left)*(canvas.width/rect.width); state.paddle.x = x - state.paddle.w/2; }
+
+  // buttons
+  document.getElementById('btnRestart').addEventListener('click', ()=>{ state.score = 0; state.lives = 3; init(1); state.running = false; });
+  document.getElementById('btnMute').addEventListener('click', ()=>{ state.mute = !state.mute; document.getElementById('btnMute').textContent = state.mute ? 'unmute' : 'mute'; });
+  document.getElementById('btnHelp').addEventListener('click', ()=>{ alert('gunakan panah kiri / kanan atau sentuh layar untuk menggerakkan paddle. tekan spasi untuk mulai / pause. hapus semua blok untuk lanjut level.'); });
+
+  // simple sounds (WebAudio)
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audioCtx = null;
+  function ensureAudio(){ if(!audioCtx) audioCtx = new AudioCtx(); }
+  function playSound(kind){ if(state.mute) return; try{ ensureAudio(); const t = audioCtx.currentTime; const o = audioCtx.createOscillator(); const g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination);
+      if(kind==='break'){ o.type='sawtooth'; o.frequency.setValueAtTime(880,t); g.gain.setValueAtTime(0.02,t); o.start(); o.stop(t+0.05); }
+      else if(kind==='hit'){ o.type='square'; o.frequency.setValueAtTime(440,t); g.gain.setValueAtTime(0.02,t); o.start(); o.stop(t+0.04); }
+      else if(kind==='lose'){ o.type='sine'; o.frequency.setValueAtTime(150,t); g.gain.setValueAtTime(0.06,t); o.start(); o.stop(t+0.4); }
+  }catch(e){}
+  }
+
+  // game loop
+  function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+  // start
+  init(1);
+  loop();
+
+  // expose for debugging
+  window.bb = {state, init};
+  </script>
+</body>
+</html>
